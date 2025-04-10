@@ -8,15 +8,27 @@ Model Context Protocol (MCP) is a framework that enables the development of tool
 
 ## Included Tools
 
-### CodeAnalysisTool
+### ProjectTool
 
-The repository includes a sample `CodeAnalysisTool` that demonstrates MCP integration by:
+The repository includes a sample `ProjectTool` that demonstrates MCP integration by:
 
-- Analyzing C# codebases
+- Analyzing C# codebases and frontend technologies (JavaScript, React, Vue)
 - Generating Markdown documentation
 - Identifying namespaces, classes, and methods
 - Supporting search functionality with regex capabilities
 - Creating file type statistics and directory structure visualizations
+
+#### Frontend Analysis Capabilities
+
+The tool provides in-depth analysis for popular frontend technologies:
+
+- **JavaScript**: Detects functions, arrow functions, classes, and methods
+- **React**: Identifies components, props, and React hooks usage
+- **Vue**: Extracts component structure, props, data properties, methods, and computed properties
+
+#### Available Methods
+
+- `AnalyzeProject`: Analyzes a codebase and generates comprehensive documentation
 
 ## Getting Started
 
