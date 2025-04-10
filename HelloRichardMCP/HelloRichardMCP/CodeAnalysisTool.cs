@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 namespace HelloRichardMCP
 {
@@ -24,11 +25,46 @@ namespace HelloRichardMCP
         }
 
         [McpServerTool, Description("Analyzes a codebase and generates a Markdown documentation guide.")]
-        public async Task<string> GenerateCodeDocumentation(string directoryPath, string outputFilePath = "")
+        public async Task<string> GenerateCodeDocumentation(
+            string directoryPath, 
+            string outputFilePath = "", 
+            string searchTerm = "", 
+            string fileExtensions = "", 
+            string excludePattern = "",
+            bool useRegex = false,
+            bool caseSensitive = false,
+            bool highlightMatches = true)
         {
             try
             {
                 _logger.LogInformation($"Starting code analysis of directory: {directoryPath}");
+                
+                if (!string.IsNullOrEmpty(searchTerm))
+                {
+                    _logger.LogInformation($"Using search filter: {searchTerm}");
+                    if (useRegex)
+                    {
+                        _logger.LogInformation("Using regular expression search");
+                    }
+                    if (caseSensitive)
+                    {
+                        _logger.LogInformation("Search is case sensitive");
+                    }
+                    if (highlightMatches)
+                    {
+                        _logger.LogInformation("Matches will be highlighted in documentation");
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(fileExtensions))
+                {
+                    _logger.LogInformation($"Filtering by file extensions: {fileExtensions}");
+                }
+                
+                if (!string.IsNullOrEmpty(excludePattern))
+                {
+                    _logger.LogInformation($"Excluding patterns: {excludePattern}");
+                }
 
                 if (!Directory.Exists(directoryPath))
                 {
@@ -39,12 +75,40 @@ namespace HelloRichardMCP
                 var documentation = new StringBuilder();
                 documentation.AppendLine("# Code Analysis Report");
                 documentation.AppendLine($"Generated on: {DateTime.Now}");
+                
+                if (!string.IsNullOrEmpty(searchTerm))
+                {
+                    documentation.AppendLine($"Search filter: \"{searchTerm}\"");
+                    if (useRegex)
+                    {
+                        documentation.AppendLine("Using regular expression search");
+                    }
+                    if (caseSensitive)
+                    {
+                        documentation.AppendLine("Search is case sensitive");
+                    }
+                    if (highlightMatches)
+                    {
+                        documentation.AppendLine("Matches are highlighted in documentation");
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(fileExtensions))
+                {
+                    documentation.AppendLine($"File extensions: {fileExtensions}");
+                }
+                
+                if (!string.IsNullOrEmpty(excludePattern))
+                {
+                    documentation.AppendLine($"Excluded patterns: {excludePattern}");
+                }
+                
                 documentation.AppendLine();
 
                 // Project Overview
                 documentation.AppendLine("## Project Overview");
                 documentation.AppendLine();
-                var fileTypes = AnalyzeFileTypes(directoryPath);
+                var fileTypes = AnalyzeFileTypes(directoryPath, fileExtensions, excludePattern);
                 documentation.AppendLine("### File Types");
                 documentation.AppendLine();
                 foreach (var fileType in fileTypes.OrderByDescending(f => f.Value))
@@ -67,7 +131,14 @@ namespace HelloRichardMCP
                     documentation.AppendLine("## C# Code Analysis");
                     documentation.AppendLine();
                     
-                    var csharpAnalysis = await AnalyzeCSharpFilesAsync(directoryPath);
+                    var csharpAnalysis = await AnalyzeCSharpFilesAsync(
+                        directoryPath, 
+                        searchTerm, 
+                        excludePattern, 
+                        useRegex, 
+                        caseSensitive,
+                        highlightMatches);
+                    
                     documentation.Append(csharpAnalysis);
                 }
 
@@ -94,17 +165,38 @@ namespace HelloRichardMCP
             }
         }
 
-        private Dictionary<string, int> AnalyzeFileTypes(string directoryPath)
+        private Dictionary<string, int> AnalyzeFileTypes(string directoryPath, string fileExtensions = "", string excludePattern = "")
         {
             var result = new Dictionary<string, int>();
             
             var files = Directory.GetFiles(directoryPath, "*.*", SearchOption.AllDirectories);
+            
+            // Parse file extensions
+            var extensionList = string.IsNullOrEmpty(fileExtensions) 
+                ? new List<string>() 
+                : fileExtensions.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(ext => ext.Trim().ToLowerInvariant())
+                    .ToList();
+            
             foreach (var file in files)
             {
+                // Skip if file matches exclude pattern
+                if (!string.IsNullOrEmpty(excludePattern) && 
+                    file.Contains(excludePattern, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                
                 var extension = Path.GetExtension(file).ToLowerInvariant();
                 if (string.IsNullOrEmpty(extension))
                 {
                     extension = "(no extension)";
+                }
+                
+                // Skip if we're filtering by extension and this extension isn't in the list
+                if (extensionList.Count > 0 && !extensionList.Contains(extension))
+                {
+                    continue;
                 }
 
                 if (result.ContainsKey(extension))
@@ -166,13 +258,38 @@ namespace HelloRichardMCP
             return builder.ToString();
         }
 
-        private async Task<string> AnalyzeCSharpFilesAsync(string directoryPath)
+        private async Task<string> AnalyzeCSharpFilesAsync(
+            string directoryPath, 
+            string searchTerm = "", 
+            string excludePattern = "", 
+            bool useRegex = false, 
+            bool caseSensitive = false,
+            bool highlightMatches = true)
         {
             var documentation = new StringBuilder();
             
+            // Compile regex if needed
+            Regex? searchRegex = null;
+            if (!string.IsNullOrEmpty(searchTerm) && useRegex)
+            {
+                try
+                {
+                    var regexOptions = caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
+                    searchRegex = new Regex(searchTerm, regexOptions);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error compiling regular expression");
+                    documentation.AppendLine($"Error compiling regular expression: {ex.Message}");
+                    return documentation.ToString();
+                }
+            }
+
             // Find all C# files
             var csharpFiles = Directory.GetFiles(directoryPath, "*.cs", SearchOption.AllDirectories)
                 .Where(file => !file.Contains("\\obj\\") && !file.Contains("\\bin\\"))
+                .Where(file => string.IsNullOrEmpty(excludePattern) || 
+                               !file.Contains(excludePattern, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (csharpFiles.Count == 0)
@@ -189,6 +306,28 @@ namespace HelloRichardMCP
                 try
                 {
                     var code = await File.ReadAllTextAsync(file);
+                    
+                    // Skip file if searchTerm is specified and not found in the file content
+                    if (!string.IsNullOrEmpty(searchTerm))
+                    {
+                        bool matchFound;
+                        if (useRegex && searchRegex != null)
+                        {
+                            matchFound = searchRegex.IsMatch(code);
+                        }
+                        else
+                        {
+                            matchFound = caseSensitive 
+                                ? code.Contains(searchTerm) 
+                                : code.Contains(searchTerm, StringComparison.OrdinalIgnoreCase);
+                        }
+                        
+                        if (!matchFound)
+                        {
+                            continue;
+                        }
+                    }
+                    
                     var syntaxTree = CSharpSyntaxTree.ParseText(code);
                     var root = await syntaxTree.GetRootAsync();
 
@@ -207,6 +346,29 @@ namespace HelloRichardMCP
                     var classDeclarations = root.DescendantNodes().OfType<ClassDeclarationSyntax>();
                     foreach (var classDecl in classDeclarations)
                     {
+                        // Skip class if searchTerm is specified and not found in the class text
+                        if (!string.IsNullOrEmpty(searchTerm))
+                        {
+                            string classText = classDecl.ToString();
+                            bool matchFound;
+                            
+                            if (useRegex && searchRegex != null)
+                            {
+                                matchFound = searchRegex.IsMatch(classText);
+                            }
+                            else
+                            {
+                                matchFound = caseSensitive 
+                                    ? classText.Contains(searchTerm) 
+                                    : classText.Contains(searchTerm, StringComparison.OrdinalIgnoreCase);
+                            }
+                            
+                            if (!matchFound)
+                            {
+                                continue;
+                            }
+                        }
+                        
                         var parentNamespace = classDecl.Parent as NamespaceDeclarationSyntax;
                         var namespaceName = parentNamespace?.Name.ToString() ?? "Global";
                         
@@ -222,6 +384,29 @@ namespace HelloRichardMCP
                         var methodDeclarations = classDecl.DescendantNodes().OfType<MethodDeclarationSyntax>();
                         foreach (var method in methodDeclarations)
                         {
+                            // Skip method if searchTerm is specified and not found in the method text
+                            if (!string.IsNullOrEmpty(searchTerm))
+                            {
+                                string methodText = method.ToString();
+                                bool matchFound;
+                                
+                                if (useRegex && searchRegex != null)
+                                {
+                                    matchFound = searchRegex.IsMatch(methodText);
+                                }
+                                else
+                                {
+                                    matchFound = caseSensitive 
+                                        ? methodText.Contains(searchTerm) 
+                                        : methodText.Contains(searchTerm, StringComparison.OrdinalIgnoreCase);
+                                }
+                                
+                                if (!matchFound)
+                                {
+                                    continue;
+                                }
+                            }
+                            
                             var methodInfo = new MethodInfo
                             {
                                 Name = method.Identifier.Text,
@@ -257,10 +442,55 @@ namespace HelloRichardMCP
             documentation.AppendLine();
             foreach (var ns in namespaces.OrderBy(n => n.Key))
             {
-                documentation.AppendLine($"- **{ns.Key}**");
+                string namespaceName = ns.Key;
+                
+                // Highlight namespace if it matches search term
+                if (!string.IsNullOrEmpty(searchTerm) && highlightMatches)
+                {
+                    if (useRegex && searchRegex != null)
+                    {
+                        if (searchRegex.IsMatch(namespaceName))
+                        {
+                            namespaceName = HighlightMatches(namespaceName, searchRegex);
+                        }
+                    }
+                    else if (!caseSensitive && namespaceName.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+                    {
+                        namespaceName = HighlightOccurrence(namespaceName, searchTerm, caseSensitive);
+                    }
+                    else if (caseSensitive && namespaceName.Contains(searchTerm))
+                    {
+                        namespaceName = HighlightOccurrence(namespaceName, searchTerm, caseSensitive);
+                    }
+                }
+                
+                documentation.AppendLine($"- **{namespaceName}**");
+                
                 foreach (var className in ns.Value.Distinct().OrderBy(c => c))
                 {
-                    documentation.AppendLine($"  - {className}");
+                    string displayClassName = className;
+                    
+                    // Highlight class name if it matches search term
+                    if (!string.IsNullOrEmpty(searchTerm) && highlightMatches)
+                    {
+                        if (useRegex && searchRegex != null)
+                        {
+                            if (searchRegex.IsMatch(displayClassName))
+                            {
+                                displayClassName = HighlightMatches(displayClassName, searchRegex);
+                            }
+                        }
+                        else if (!caseSensitive && displayClassName.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+                        {
+                            displayClassName = HighlightOccurrence(displayClassName, searchTerm, caseSensitive);
+                        }
+                        else if (caseSensitive && displayClassName.Contains(searchTerm))
+                        {
+                            displayClassName = HighlightOccurrence(displayClassName, searchTerm, caseSensitive);
+                        }
+                    }
+                    
+                    documentation.AppendLine($"  - {displayClassName}");
                 }
             }
             documentation.AppendLine();
@@ -270,7 +500,29 @@ namespace HelloRichardMCP
             documentation.AppendLine();
             foreach (var classInfo in classes.OrderBy(c => c.Namespace).ThenBy(c => c.Name))
             {
-                documentation.AppendLine($"#### {classInfo.Name}");
+                string displayClassName = classInfo.Name;
+                
+                // Highlight class name if it matches search term
+                if (!string.IsNullOrEmpty(searchTerm) && highlightMatches)
+                {
+                    if (useRegex && searchRegex != null)
+                    {
+                        if (searchRegex.IsMatch(displayClassName))
+                        {
+                            displayClassName = HighlightMatches(displayClassName, searchRegex);
+                        }
+                    }
+                    else if (!caseSensitive && displayClassName.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+                    {
+                        displayClassName = HighlightOccurrence(displayClassName, searchTerm, caseSensitive);
+                    }
+                    else if (caseSensitive && displayClassName.Contains(searchTerm))
+                    {
+                        displayClassName = HighlightOccurrence(displayClassName, searchTerm, caseSensitive);
+                    }
+                }
+                
+                documentation.AppendLine($"#### {displayClassName}");
                 documentation.AppendLine();
                 documentation.AppendLine($"**Namespace:** {classInfo.Namespace}");
                 documentation.AppendLine($"**File:** {Path.GetFileName(classInfo.FilePath)}");
@@ -285,12 +537,72 @@ namespace HelloRichardMCP
                     
                     foreach (var method in classInfo.Methods.OrderBy(m => m.Name))
                     {
+                        string displayMethodName = method.Name;
+                        string displayReturnType = method.ReturnType;
+                        
+                        // Highlight method names and return types if they match search term
+                        if (!string.IsNullOrEmpty(searchTerm) && highlightMatches)
+                        {
+                            if (useRegex && searchRegex != null)
+                            {
+                                if (searchRegex.IsMatch(displayMethodName))
+                                {
+                                    displayMethodName = HighlightMatches(displayMethodName, searchRegex);
+                                }
+                                if (searchRegex.IsMatch(displayReturnType))
+                                {
+                                    displayReturnType = HighlightMatches(displayReturnType, searchRegex);
+                                }
+                            }
+                            else
+                            {
+                                if (!caseSensitive && displayMethodName.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    displayMethodName = HighlightOccurrence(displayMethodName, searchTerm, caseSensitive);
+                                }
+                                else if (caseSensitive && displayMethodName.Contains(searchTerm))
+                                {
+                                    displayMethodName = HighlightOccurrence(displayMethodName, searchTerm, caseSensitive);
+                                }
+                                
+                                if (!caseSensitive && displayReturnType.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    displayReturnType = HighlightOccurrence(displayReturnType, searchTerm, caseSensitive);
+                                }
+                                else if (caseSensitive && displayReturnType.Contains(searchTerm))
+                                {
+                                    displayReturnType = HighlightOccurrence(displayReturnType, searchTerm, caseSensitive);
+                                }
+                            }
+                        }
+                        
                         var modifiers = new List<string>();
                         if (method.IsPublic) modifiers.Add("public");
                         if (method.IsStatic) modifiers.Add("static");
                         
                         var parametersString = string.Join(", ", method.Parameters);
-                        documentation.AppendLine($"| {method.Name} | {method.ReturnType} | {parametersString} | {string.Join(", ", modifiers)} |");
+                        
+                        // Highlight parameters if they match search term
+                        if (!string.IsNullOrEmpty(searchTerm) && highlightMatches)
+                        {
+                            if (useRegex && searchRegex != null)
+                            {
+                                if (searchRegex.IsMatch(parametersString))
+                                {
+                                    parametersString = HighlightMatches(parametersString, searchRegex);
+                                }
+                            }
+                            else if (!caseSensitive && parametersString.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+                            {
+                                parametersString = HighlightOccurrence(parametersString, searchTerm, caseSensitive);
+                            }
+                            else if (caseSensitive && parametersString.Contains(searchTerm))
+                            {
+                                parametersString = HighlightOccurrence(parametersString, searchTerm, caseSensitive);
+                            }
+                        }
+                        
+                        documentation.AppendLine($"| {displayMethodName} | {displayReturnType} | {parametersString} | {string.Join(", ", modifiers)} |");
                     }
                     
                     documentation.AppendLine();
@@ -298,6 +610,49 @@ namespace HelloRichardMCP
             }
 
             return documentation.ToString();
+        }
+
+        // Helper method to highlight regex matches in markdown
+        private string HighlightMatches(string text, Regex regex)
+        {
+            return regex.Replace(text, match => $"**`{match.Value}`**");
+        }
+        
+        // Helper method to highlight occurrences of a string in markdown
+        private string HighlightOccurrence(string text, string searchTerm, bool caseSensitive)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(searchTerm))
+            {
+                return text;
+            }
+            
+            StringComparison comparison = caseSensitive 
+                ? StringComparison.Ordinal 
+                : StringComparison.OrdinalIgnoreCase;
+                
+            var result = new StringBuilder();
+            int currentIndex = 0;
+            int searchIndex;
+            
+            while ((searchIndex = text.IndexOf(searchTerm, currentIndex, comparison)) >= 0)
+            {
+                // Add the text before the match
+                result.Append(text.Substring(currentIndex, searchIndex - currentIndex));
+                
+                // Add the highlighted match
+                string match = text.Substring(searchIndex, searchTerm.Length);
+                result.Append($"**`{match}`**");
+                
+                currentIndex = searchIndex + searchTerm.Length;
+            }
+            
+            // Add any remaining text
+            if (currentIndex < text.Length)
+            {
+                result.Append(text.Substring(currentIndex));
+            }
+            
+            return result.ToString();
         }
 
         private class ClassInfo
